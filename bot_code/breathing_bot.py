@@ -5,6 +5,7 @@ from discord.ext import commands
 from dotenv import load_dotenv
 import asyncio
 import functools
+import sys
 
 # Load environment variables
 load_dotenv()
@@ -15,17 +16,25 @@ if not os.getenv("BOT_TOKEN"):
     load_dotenv(env_path)
     print(f"🔄 Attempted to load .env from: {env_path}")
 
+print(f"🐍 Running on Python {sys.version}")
+
 # Bot setup
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
-bot = commands.Bot(command_prefix='!', intents=intents)
+
+# Python 3.13 compatibility: Use more conservative event loop handling
+try:
+    bot = commands.Bot(command_prefix='!', intents=intents)
+except Exception as e:
+    print(f"❌ Bot initialization error: {e}")
+    sys.exit(1)
 
 # YouTube stream settings
 YOUTUBE_URL = os.getenv("YOUTUBE_URL")
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5', 
-    'options': '-vn'
+    'options': '-vn -loglevel error'  # Reduced logging
 }
 YTDL_OPTIONS = {
     'format': 'bestaudio/best',
@@ -37,7 +46,9 @@ YTDL_OPTIONS = {
     'logtostderr': False,
     'ignoreerrors': False,
     'default_search': 'auto',
-    'source_address': '0.0.0.0'
+    'source_address': '0.0.0.0',
+    'quiet': True,
+    'no_warnings': True
 }
 
 # Global voice client and disconnection task reference
@@ -47,16 +58,22 @@ disconnection_timer_task = None
 stream_restart_task = None
 
 def sync_restart_stream(vc, error=None):
-    """Synchronous wrapper for the async restart function - FIXED signature"""
+    """Synchronous wrapper for the async restart function - Python 3.13 compatible"""
     if error:
         print(f"🎵 Player error: {error}")
     else:
         print("🎵 Player finished normally")
     
-    # Create a new task for restarting the stream
-    loop = asyncio.get_event_loop()
-    if loop.is_running():
-        asyncio.create_task(restart_stream(vc))
+    # Python 3.13 compatible task creation
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(restart_stream(vc))
+    except RuntimeError:
+        # Fallback for edge cases
+        try:
+            asyncio.create_task(restart_stream(vc))
+        except Exception as e:
+            print(f"❌ Error creating restart task: {e}")
 
 async def start_music_stream(vc):
     """Start the 24/7 music stream using the provided voice client"""
@@ -86,29 +103,31 @@ async def start_music_stream(vc):
             print("🎵 Music is already playing")
             return
             
-        # Extract YouTube URL info
+        # Extract YouTube URL info with better error handling
         print("🔍 Extracting YouTube stream info...")
-        with youtube_dl.YoutubeDL(YTDL_OPTIONS) as ydl:
-            try:
-                info = ydl.extract_info(YOUTUBE_URL, download=False)
-            except Exception as extract_error:
-                print(f"❌ YouTube info extraction failed: {extract_error}")
-                # Schedule retry after delay
-                await asyncio.sleep(15)
-                if vc and vc.is_connected() and not vc.is_playing():
-                    print("🔄 Retrying music stream after extraction error...")
-                    await start_music_stream(vc)
-                return
-            
-            if 'url' not in info:
-                print("❌ Could not extract stream URL from YouTube")
-                return
-                
-            url = info['url']
-            title = info.get('title', 'Unknown')
-            print(f"🎵 Found stream: {title}")
+        try:
+            with youtube_dl.YoutubeDL(YTDL_OPTIONS) as ydl:
+                info = await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: ydl.extract_info(YOUTUBE_URL, download=False)
+                )
+        except Exception as extract_error:
+            print(f"❌ YouTube info extraction failed: {extract_error}")
+            # Schedule retry after delay
+            await asyncio.sleep(15)
+            if vc and vc.is_connected() and not vc.is_playing():
+                print("🔄 Retrying music stream after extraction error...")
+                await start_music_stream(vc)
+            return
         
-        # Create audio source
+        if 'url' not in info:
+            print("❌ Could not extract stream URL from YouTube")
+            return
+            
+        url = info['url']
+        title = info.get('title', 'Unknown')
+        print(f"🎵 Found stream: {title}")
+        
+        # Create audio source with better error handling
         try:
             audio_source = discord.FFmpegPCMAudio(url, **FFMPEG_OPTIONS)
         except Exception as audio_error:
@@ -120,19 +139,11 @@ async def start_music_stream(vc):
             print("❌ Connection lost before playing audio")
             return
         
-        # Play with callback for restart - FIXED: using functools.partial to pass vc
+        # Play with callback for restart - Using functools.partial for compatibility
         restart_callback = functools.partial(sync_restart_stream, vc)
         vc.play(audio_source, after=restart_callback)
         print("🎵 Music stream started successfully")
         
-    except youtube_dl.DownloadError as e:
-        print(f"❌ YouTube extraction error: {e}")
-        # Schedule retry after delay
-        await asyncio.sleep(10)
-        if vc and vc.is_connected() and not vc.is_playing():
-            print("🔄 Retrying music stream after YouTube error...")
-            await start_music_stream(vc)
-            
     except Exception as e:
         print(f"❌ Stream error: {e}")
         # Schedule retry after delay
@@ -151,6 +162,10 @@ async def restart_stream(vc):
         # Cancel any existing restart task to prevent overlapping
         if stream_restart_task and not stream_restart_task.done():
             stream_restart_task.cancel()
+            try:
+                await stream_restart_task
+            except asyncio.CancelledError:
+                pass
             
         # Short delay before attempting restart
         await asyncio.sleep(2)
@@ -177,7 +192,11 @@ async def schedule_disconnection():
     """Schedules the bot to disconnect after 10 minutes."""
     global voice_client, disconnection_timer_task, stream_restart_task
     
-    await asyncio.sleep(600)  # 10 minutes
+    try:
+        await asyncio.sleep(600)  # 10 minutes
+    except asyncio.CancelledError:
+        print("⏰ Disconnection timer cancelled")
+        return
     
     async with voice_state_lock:
         if voice_client and voice_client.is_connected():
@@ -185,6 +204,10 @@ async def schedule_disconnection():
                 # Stop any ongoing stream restart tasks
                 if stream_restart_task and not stream_restart_task.done():
                     stream_restart_task.cancel()
+                    try:
+                        await stream_restart_task
+                    except asyncio.CancelledError:
+                        pass
                     
                 # Stop the music if playing
                 if voice_client.is_playing():
@@ -204,13 +227,21 @@ async def complete_voice_cleanup():
     
     print("🧹 Starting complete voice cleanup...")
     
-    # Cancel all tasks
+    # Cancel all tasks with proper awaiting
     if disconnection_timer_task and not disconnection_timer_task.done():
         disconnection_timer_task.cancel()
+        try:
+            await disconnection_timer_task
+        except asyncio.CancelledError:
+            pass
         disconnection_timer_task = None
         
     if stream_restart_task and not stream_restart_task.done():
         stream_restart_task.cancel()
+        try:
+            await stream_restart_task
+        except asyncio.CancelledError:
+            pass
         stream_restart_task = None
     
     # Cleanup current voice client
@@ -239,18 +270,20 @@ async def complete_voice_cleanup():
     
     # Clear Discord.py internal voice client tracking
     try:
-        bot._connection._voice_clients.clear()
+        if hasattr(bot._connection, '_voice_clients'):
+            bot._connection._voice_clients.clear()
     except Exception as e:
         print(f"❌ Error clearing voice clients: {e}")
     
     # Wait for cleanup to complete
-    await asyncio.sleep(3)
+    await asyncio.sleep(2)
     print("🧹 Complete voice cleanup finished")
 
 @bot.event
 async def on_ready():
     print(f'🤖 Logged in as {bot.user}')
     print(f'📊 Bot is in {len(bot.guilds)} servers')
+    print(f'🐍 Running on Python {sys.version}')
     print('🎯 Bot ready and waiting for users to join voice channels')
 
 @bot.event
@@ -303,7 +336,7 @@ async def on_voice_state_update(member, before, after):
             # Complete cleanup before attempting new connection
             await complete_voice_cleanup()
 
-            # Attempt connection with improved retry logic
+            # Attempt connection with improved retry logic and shorter timeouts for Python 3.13
             max_retries = 3
             connection_successful = False
             
@@ -312,20 +345,24 @@ async def on_voice_state_update(member, before, after):
                     print(f"🔗 Connection attempt {attempt + 1}/{max_retries}...")
                     
                     if attempt > 0:
-                        wait_time = 5 * attempt  # Increased wait time
+                        wait_time = 3 + (2 * attempt)  # Shorter wait times
                         print(f"⏳ Waiting {wait_time}s before retry...")
                         await asyncio.sleep(wait_time)
                     
-                    # Try to connect with longer timeout
-                    new_voice_client = await target_voice_channel.connect(
-                        reconnect=False, 
-                        timeout=60.0  # Increased timeout
-                    )
+                    # Try to connect with shorter timeout for Python 3.13 compatibility
+                    try:
+                        new_voice_client = await asyncio.wait_for(
+                            target_voice_channel.connect(reconnect=False),
+                            timeout=20.0  # Shorter timeout
+                        )
+                    except asyncio.TimeoutError:
+                        print(f"⏰ Connection timeout on attempt {attempt + 1}")
+                        continue
                     
-                    # Verify connection with longer wait
-                    await asyncio.sleep(2)
+                    # Verify connection
+                    await asyncio.sleep(1)
                     
-                    if new_voice_client.is_connected() and new_voice_client.channel == target_voice_channel:
+                    if new_voice_client and new_voice_client.is_connected():
                         voice_client = new_voice_client
                         print(f"✅ Bot successfully connected to {target_voice_channel.name} on attempt {attempt + 1}")
                         await start_music_stream(voice_client)
@@ -333,26 +370,22 @@ async def on_voice_state_update(member, before, after):
                         break
                     else:
                         print(f"❌ Connection verification failed on attempt {attempt + 1}")
-                        try:
-                            await new_voice_client.disconnect(force=True)
-                            new_voice_client.cleanup()
-                        except:
-                            pass
+                        if new_voice_client:
+                            try:
+                                await new_voice_client.disconnect(force=True)
+                                new_voice_client.cleanup()
+                            except:
+                                pass
                         new_voice_client = None
                         
-                except asyncio.TimeoutError:
-                    print(f"⏰ Connection timeout on attempt {attempt + 1}")
-                    await asyncio.sleep(2)  # Brief pause before next attempt
-                    
                 except discord.ClientException as e:
                     print(f"❌ Discord client error on attempt {attempt + 1}: {e}")
-                    # Force cleanup and wait longer on client errors
                     await complete_voice_cleanup()
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(3)
                     
                 except Exception as e:
                     print(f"❌ Unexpected connection error on attempt {attempt + 1}: {e}")
-                    await asyncio.sleep(3)
+                    await asyncio.sleep(2)
                 
             if not connection_successful:
                 print("💥 All connection attempts failed. Bot will not join voice channel")
@@ -363,6 +396,10 @@ async def on_voice_state_update(member, before, after):
             if voice_client and voice_client.is_connected():
                 if disconnection_timer_task and not disconnection_timer_task.done():
                     disconnection_timer_task.cancel()
+                    try:
+                        await disconnection_timer_task
+                    except asyncio.CancelledError:
+                        pass
                     print("⏰ Cancelled previous disconnection timer")
                 disconnection_timer_task = asyncio.create_task(schedule_disconnection())
                 print("⏰ New disconnection timer scheduled for 10 minutes")
@@ -378,12 +415,20 @@ async def on_voice_state_update(member, before, after):
                 print("🏃 Target voice channel is now empty of human users")
                 if disconnection_timer_task and not disconnection_timer_task.done():
                     disconnection_timer_task.cancel()
+                    try:
+                        await disconnection_timer_task
+                    except asyncio.CancelledError:
+                        pass
                     print("⏰ Cancelled pending disconnection timer due to empty channel")
                 
                 try:
                     # Stop music and any restart tasks
                     if stream_restart_task and not stream_restart_task.done():
                         stream_restart_task.cancel()
+                        try:
+                            await stream_restart_task
+                        except asyncio.CancelledError:
+                            pass
                     if voice_client.is_playing():
                         voice_client.stop()
                     await voice_client.disconnect(force=True)
@@ -454,14 +499,20 @@ async def music_status_command(ctx):
 async def on_error(event, *args, **kwargs):
     print(f"❌ Bot error in {event}: {args}")
 
-# Run the bot
+# Run the bot with Python 3.13 compatibility
 if __name__ == "__main__":
     token = os.getenv("BOT_TOKEN")
     if not token:
         print("❌ ERROR: BOT_TOKEN not found in environment variables!")
         print("📁 Please check your .env file exists and contains:")
         print("   BOT_TOKEN=your_bot_token_here")
-        exit(1)
+        sys.exit(1)
     
     print(f"🔑 Bot token loaded: {token[:20]}...")
-    bot.run(token)
+    print(f"🐍 Starting bot on Python {sys.version}")
+    
+    try:
+        bot.run(token)
+    except Exception as e:
+        print(f"❌ Bot crashed: {e}")
+        sys.exit(1)
