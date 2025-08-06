@@ -1,16 +1,27 @@
-aiohappyeyeballs==2.6.1
-aiohttp==3.12.15
-aiosignal==1.4.0
-attrs==25.3.0
-audioop-lts==0.2.2
-cffi==1.17.1
+# Core Discord.py with voice support
 discord.py==2.3.2
-frozenlist==1.7.0
-idna==3.10
+
+# YouTube-dl alternative - keep current version (it's working)
+yt-dlp==2025.7.21
+
+# Environment variables - keep current version
+python-dotenv==1.1.1
+
+# Audio processing dependencies - keep current versions
+PyNaCl==1.5.0
+cffi==1.17.1
+pycparser==2.22
+
+# HTTP client dependencies - keep current versions (they're working)
+aiohttp==3.12.15
+aiohappyeyeballs==2.6.1
+aiosignal==1.4.0
+yarl==1.20.1
 multidict==6.6.3
 propcache==0.3.2
-pycparser==2.22
-PyNaCl==1.5.0
-python-dotenv==1.1.1
-yarl==1.20.1
-yt-dlp==2025.7.21
+frozenlist==1.7.0
+idna==3.10
+attrs==25.3.0
+
+# Audio processing for older Python compatibility
+audioop-lts==0.2.2
