@@ -32,18 +32,17 @@ disconnect_timer = None
 
 
 # -------------------------------------------------------------
-# Robust voice connect helper
+# Robust voice connect helper (inserted between globals & play_music)
 # -------------------------------------------------------------
-async def connect_voice(channel):
-    """Connect with limited retries to avoid 4006 loops."""
-    for attempt in range(1, 4):
+async def connect_voice(channel: discord.VoiceChannel):
+    for attempt in range(1, 6):
         try:
             return await channel.connect(timeout=15, reconnect=False)
-        except discord.ConnectionClosed as exc:
-            print(f"[voice] attempt {attempt} failed: {exc}")
-            if attempt == 3:
+        except discord.ConnectionClosed as e:
+            print(f"[voice] {attempt}/5  4006 hit — {e}")
+            if attempt == 5:
                 raise
-            await asyncio.sleep(attempt)
+            await asyncio.sleep(5 * attempt)
 
 
 # -------------------------------------------------------------
@@ -125,6 +124,7 @@ async def on_voice_state_update(member, before, after):
                 if voice_client:
                     await voice_client.disconnect()
 
+                # --- replaced single .connect() with robust helper ---
                 voice_client = await connect_voice(target_channel)
                 await play_music(voice_client)
                 print(f"✅ Connected to {target_channel.name}")
