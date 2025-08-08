@@ -14,24 +14,43 @@ intents.members = True
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# ─────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 # CONFIGURATION – EDIT THESE TWO VALUES
-# ─────────────────────────────────────────────────────────
-LOCAL_MP3_PATH = r"/Users/codylockyear/Documents/BreathingBridge/assets/meditation music.mp3"   # <── change me
-VOICE_CHANNEL_ID = int(os.getenv("VOICE_CHANNEL_ID")) # <── env ok
-# ─────────────────────────────────────────────────────────
+# -------------------------------------------------------------
+LOCAL_MP3_PATH = r"/Users/codylockyear/Documents/BreathingBridge/assets/meditation music.mp3"
+VOICE_CHANNEL_ID = int(os.getenv("VOICE_CHANNEL_ID"))
+# -------------------------------------------------------------
 
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
     'options': '-vn'
 }
 
-# Simple state tracking
+# Global state
 voice_client = None
 disconnect_timer = None
 
+
+# -------------------------------------------------------------
+# Robust voice connect helper
+# -------------------------------------------------------------
+async def connect_voice(channel):
+    """Connect with limited retries to avoid 4006 loops."""
+    for attempt in range(1, 4):
+        try:
+            return await channel.connect(timeout=15, reconnect=False)
+        except discord.ConnectionClosed as exc:
+            print(f"[voice] attempt {attempt} failed: {exc}")
+            if attempt == 3:
+                raise
+            await asyncio.sleep(attempt)
+
+
+# -------------------------------------------------------------
+# Music helpers
+# -------------------------------------------------------------
 async def play_music(vc: discord.VoiceClient):
-    """Start playing the local MP3 file in the given voice client."""
+    """Start playing the local MP3."""
     if vc.is_playing():
         return
 
@@ -46,14 +65,16 @@ async def play_music(vc: discord.VoiceClient):
     except Exception as e:
         print(f"❌ Play error: {e}")
 
+
 async def restart_music(vc: discord.VoiceClient):
-    """Restart the track when it ends."""
+    """Restart track on finish."""
     await asyncio.sleep(2)
     if vc and vc.is_connected() and not vc.is_playing():
         await play_music(vc)
 
+
 async def schedule_disconnect():
-    """Disconnect after 10 minutes of inactivity."""
+    """Auto-disconnect after 10 minutes of inactivity."""
     global voice_client, disconnect_timer
     await asyncio.sleep(600)
     if voice_client and voice_client.is_connected():
@@ -62,12 +83,14 @@ async def schedule_disconnect():
     voice_client = None
     disconnect_timer = None
 
-# ────────────────
-# EVENT HANDLERS
-# ────────────────
+
+# -------------------------------------------------------------
+# Discord events
+# -------------------------------------------------------------
 @bot.event
 async def on_ready():
     print(f'🤖 {bot.user} ready - Python {sys.version[:5]}')
+
 
 @bot.event
 async def on_voice_state_update(member, before, after):
@@ -80,7 +103,7 @@ async def on_voice_state_update(member, before, after):
     if not target_channel:
         return
 
-    # User joined target channel
+    # Someone entered the target channel
     if after.channel and after.channel.id == VOICE_CHANNEL_ID and (not before.channel or before.channel.id != VOICE_CHANNEL_ID):
         print(f"👤 {member.name} joined")
 
@@ -102,7 +125,7 @@ async def on_voice_state_update(member, before, after):
                 if voice_client:
                     await voice_client.disconnect()
 
-                voice_client = await target_channel.connect()
+                voice_client = await connect_voice(target_channel)
                 await play_music(voice_client)
                 print(f"✅ Connected to {target_channel.name}")
             except Exception as e:
@@ -113,7 +136,7 @@ async def on_voice_state_update(member, before, after):
             disconnect_timer.cancel()
         disconnect_timer = asyncio.create_task(schedule_disconnect())
 
-    # User left target channel
+    # Someone left the target channel
     elif before.channel and before.channel.id == VOICE_CHANNEL_ID and (not after.channel or after.channel.id != VOICE_CHANNEL_ID):
         print(f"👋 {member.name} left")
 
@@ -126,9 +149,10 @@ async def on_voice_state_update(member, before, after):
             disconnect_timer = None
             print("🏃 Disconnected – channel empty")
 
-# ────────────────
-# COMMANDS
-# ────────────────
+
+# -------------------------------------------------------------
+# Text commands
+# -------------------------------------------------------------
 @bot.command()
 async def status(ctx):
     """Check bot status."""
@@ -137,6 +161,7 @@ async def status(ctx):
         await ctx.send(f"Connected to {voice_client.channel.name} | Playing: {playing}")
     else:
         await ctx.send("Not connected to voice")
+
 
 @bot.command()
 async def stop(ctx):
@@ -147,9 +172,10 @@ async def stop(ctx):
     else:
         await ctx.send("Nothing playing")
 
-# ────────────────
-# RUN
-# ────────────────
+
+# -------------------------------------------------------------
+# Run the bot
+# -------------------------------------------------------------
 if __name__ == "__main__":
     token = os.getenv("BOT_TOKEN")
     if not token:

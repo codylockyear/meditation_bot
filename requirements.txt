@@ -1,18 +1,18 @@
-# Core Discord.py with voice support
-discord.py==2.3.2
+# Core Discord.py with *voice* extra (pulls PyNaCl automatically)
+discord.py[voice]==2.3.2
 
-# YouTube-dl alternative - keep current version (it's working)
+# YouTube-dl alternative – harmless to keep
 yt-dlp==2025.7.21
 
-# Environment variables - keep current version
+# Environment variables
 python-dotenv==1.1.1
 
-# Audio processing dependencies - keep current versions
+# Extra audio helpers (already satisfied by discord.py[voice])
 PyNaCl==1.5.0
 cffi==1.17.1
 pycparser==2.22
 
-# HTTP client dependencies - keep current versions (they're working)
+# HTTP stack (keep pinned versions)
 aiohttp==3.12.15
 aiohappyeyeballs==2.6.1
 aiosignal==1.4.0
@@ -23,5 +23,5 @@ frozenlist==1.7.0
 idna==3.10
 attrs==25.3.0
 
-# Audio processing for older Python compatibility
+# Python ≤3.11 compatibility
 audioop-lts==0.2.2
