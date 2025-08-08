@@ -17,7 +17,7 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 # -------------------------------------------------------------
 # CONFIGURATION – EDIT THESE TWO VALUES
 # -------------------------------------------------------------
-LOCAL_MP3_PATH = r"/Users/codylockyear/Documents/BreathingBridge/assets/meditation music.mp3"
+LOCAL_MP3_PATH = "/opt/render/project/src/assets/meditation music.mp3"
 VOICE_CHANNEL_ID = int(os.getenv("VOICE_CHANNEL_ID"))
 # -------------------------------------------------------------
 
